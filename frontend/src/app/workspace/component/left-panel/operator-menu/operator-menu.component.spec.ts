@@ -20,7 +20,13 @@
 import {
   mockOperatorGroup,
   mockScanSourceSchema,
+  mockViewResultsSchema,
 } from "../../../service/operator-metadata/mock-operator-metadata.data";
+import {
+  mockPoint,
+  mockResultPredicate,
+  mockScanPredicate,
+} from "../../../service/workflow-graph/model/mock-workflow-data";
 import { UndoRedoService } from "../../../service/undo-redo/undo-redo.service";
 import { DragDropService } from "../../../service/drag-drop/drag-drop.service";
 import { ComponentFixture, fakeAsync, TestBed, tick } from "@angular/core/testing";
@@ -38,6 +44,17 @@ import { NzCollapseModule } from "ng-zorro-antd/collapse";
 import type { NzAutocompleteOptionComponent } from "ng-zorro-antd/auto-complete";
 import type * as joint from "jointjs";
 import { commonTestProviders } from "../../../../common/testing/test-utils";
+import { NextOperatorService } from "../../../service/next-operator/next-operator.service";
+import { OperatorSchema } from "../../../types/operator-schema.interface";
+
+/** Answers from a rule table the test sets, so the panel can be tested without fetching the real one. */
+class StubNextOperatorService {
+  public rules: Record<string, OperatorSchema[]> = {};
+
+  public suggestionsFor(group: string): Promise<{ suggestions: OperatorSchema[]; known: boolean }> {
+    return Promise.resolve({ suggestions: this.rules[group] ?? [], known: group in this.rules });
+  }
+}
 
 describe("OperatorPanelComponent", () => {
   let component: OperatorMenuComponent;
@@ -55,6 +72,7 @@ describe("OperatorPanelComponent", () => {
         UndoRedoService,
         WorkflowUtilService,
         JointUIService,
+        { provide: NextOperatorService, useClass: StubNextOperatorService },
         ...commonTestProviders,
       ],
       imports: [
@@ -92,6 +110,98 @@ describe("OperatorPanelComponent", () => {
 
     expect(component.autocompleteOptions.length).toBe(1);
     expect(component.autocompleteOptions[0]).toBe(mockScanSourceSchema);
+  });
+
+  /**
+   * Selecting one operator offers what usually follows it; choosing a suggestion places it beside the
+   * selected operator, wires the two, and selects the new one so the next step is offered in turn.
+   */
+  describe("suggesting the next operator", () => {
+    let stubRules: StubNextOperatorService;
+    let workflowActionService: WorkflowActionService;
+
+    const settle = () => new Promise(resolve => setTimeout(resolve));
+
+    beforeEach(() => {
+      stubRules = TestBed.inject(NextOperatorService) as unknown as StubNextOperatorService;
+      workflowActionService = TestBed.inject(WorkflowActionService);
+    });
+
+    async function selectScan(): Promise<void> {
+      workflowActionService.addOperator(mockScanPredicate, mockPoint);
+      workflowActionService.getJointGraphWrapper().highlightOperators(mockScanPredicate.operatorID);
+      await settle();
+    }
+
+    it("offers what usually follows the selected operator", async () => {
+      stubRules.rules = { Source: [mockViewResultsSchema] };
+
+      await selectScan();
+
+      expect(component.selectedOperatorName).toBe("Source: Scan");
+      expect(component.nextSuggestions).toEqual([mockViewResultsSchema]);
+    });
+
+    it("says so when the selected operator ends the workflow", async () => {
+      stubRules.rules = { Source: [] };
+
+      await selectScan();
+
+      expect(component.nextSuggestions).toEqual([]);
+      expect(component.nextStepNote).toContain("ends the workflow");
+    });
+
+    it("tells an operator nobody wrote a rule for apart from one that ends the workflow", async () => {
+      stubRules.rules = {};
+
+      await selectScan();
+
+      expect(component.nextStepNote).toContain("No suggestions");
+    });
+
+    it("clears the suggestions when the selection is cleared", async () => {
+      stubRules.rules = { Source: [mockViewResultsSchema] };
+      await selectScan();
+
+      workflowActionService.getJointGraphWrapper().unhighlightOperators(mockScanPredicate.operatorID);
+      await settle();
+
+      expect(component.nextSuggestions).toEqual([]);
+      expect(component.nextStepNote).toBe("");
+    });
+
+    it("offers nothing while several operators are selected, since there is no single 'after'", async () => {
+      stubRules.rules = { Source: [mockViewResultsSchema] };
+      const wrapper = workflowActionService.getJointGraphWrapper();
+      workflowActionService.addOperator(mockScanPredicate, mockPoint);
+      workflowActionService.addOperator(mockResultPredicate, mockPoint);
+
+      wrapper.setMultiSelectMode(true);
+      wrapper.highlightOperators(mockScanPredicate.operatorID, mockResultPredicate.operatorID);
+      await settle();
+
+      expect(component.nextSuggestions).toEqual([]);
+    });
+
+    it("places a chosen suggestion, wires it to the selected operator and selects it", async () => {
+      stubRules.rules = { Source: [mockViewResultsSchema] };
+      await selectScan();
+
+      component.addNext(mockViewResultsSchema);
+
+      const graph = workflowActionService.getTexeraGraph();
+      const added = graph.getAllOperators().find(op => op.operatorType === mockViewResultsSchema.operatorType);
+      expect(added).toBeDefined();
+      expect(graph.getAllLinks()).toEqual([
+        expect.objectContaining({
+          source: { operatorID: mockScanPredicate.operatorID, portID: "output-0" },
+          target: expect.objectContaining({ operatorID: added!.operatorID }),
+        }),
+      ]);
+      expect(workflowActionService.getJointGraphWrapper().getCurrentHighlightedOperatorIDs()).toEqual([
+        added!.operatorID,
+      ]);
+    });
   });
 
   /**

@@ -40,6 +40,29 @@
 
 <div id="spacer"></div>
 
+<!-- What usually comes after the operator the canvas has selected. Choosing one
+     places it and wires it, so the search is not needed at all. -->
+<div
+  class="next-step"
+  *ngIf="nextSuggestions.length || nextStepNote">
+  <div class="next-step__title">After {{ selectedOperatorName }}</div>
+  <button
+    *ngFor="let suggestion of nextSuggestions"
+    type="button"
+    class="next-step__option"
+    [disabled]="!canModify"
+    [title]="suggestion.additionalMetadata.operatorDescription || ''"
+    (click)="addNext(suggestion)">
+    <span class="next-step__plus">+</span>
+    {{ suggestion.additionalMetadata.userFriendlyName }}
+  </button>
+  <div
+    class="next-step__note"
+    *ngIf="nextStepNote">
+    {{ nextStepNote }}
+  </div>
+</div>
+
 <ng-container *ngTemplateOutlet="menuTemplate; context: { $implicit: groupNames, depth: 0 }"></ng-container>
 
 <ng-template

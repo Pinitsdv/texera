@@ -17,7 +17,7 @@
  * under the License.
  */
 
-import { Component } from "@angular/core";
+import { ChangeDetectorRef, Component } from "@angular/core";
 import Fuse from "fuse.js";
 import { OperatorMetadataService } from "../../../service/operator-metadata/operator-metadata.service";
 import { GroupInfo, OperatorSchema } from "../../../types/operator-schema.interface";
@@ -25,6 +25,7 @@ import { DragDropService } from "../../../service/drag-drop/drag-drop.service";
 import { WorkflowActionService } from "../../../service/workflow-graph/model/workflow-action.service";
 import { WorkflowUtilService } from "../../../service/workflow-graph/util/workflow-util.service";
 import { UntilDestroy, untilDestroyed } from "@ngneat/until-destroy";
+import { merge } from "rxjs";
 import {
   NzAutocompleteOptionComponent,
   NzAutocompleteTriggerDirective,
@@ -33,9 +34,10 @@ import {
 import { NzSpaceCompactItemDirective } from "ng-zorro-antd/space";
 import { NzInputDirective } from "ng-zorro-antd/input";
 import { FormsModule } from "@angular/forms";
-import { NgFor, NgTemplateOutlet } from "@angular/common";
+import { NgFor, NgIf, NgTemplateOutlet } from "@angular/common";
 import { OperatorLabelComponent } from "./operator-label/operator-label.component";
 import { NzCollapseComponent, NzCollapsePanelComponent } from "ng-zorro-antd/collapse";
+import { NextOperatorService } from "../../../service/next-operator/next-operator.service";
 
 @UntilDestroy()
 @Component({
@@ -49,6 +51,7 @@ import { NzCollapseComponent, NzCollapsePanelComponent } from "ng-zorro-antd/col
     NzAutocompleteTriggerDirective,
     NzAutocompleteComponent,
     NgFor,
+    NgIf,
     NzAutocompleteOptionComponent,
     OperatorLabelComponent,
     NgTemplateOutlet,
@@ -67,6 +70,14 @@ export class OperatorMenuComponent {
 
   public canModify = true;
 
+  // The operator the canvas has selected, and what is worth adding after it.
+  public selectedOperatorName = "";
+  public nextSuggestions: OperatorSchema[] = [];
+  // Shown instead of the list when an operator ends the workflow, so an empty
+  // panel is never mistaken for a broken one.
+  public nextStepNote = "";
+  private selectedOperatorId: string | null = null;
+
   // fuzzy search using fuse.js. See parameters in options at https://fusejs.io/
   public fuse = new Fuse([] as ReadonlyArray<OperatorSchema>, {
     shouldSort: true,
@@ -81,7 +92,9 @@ export class OperatorMenuComponent {
     private operatorMetadataService: OperatorMetadataService,
     private workflowActionService: WorkflowActionService,
     private workflowUtilService: WorkflowUtilService,
-    private dragDropService: DragDropService
+    private dragDropService: DragDropService,
+    private nextOperatorService: NextOperatorService,
+    private changeDetectorRef: ChangeDetectorRef
   ) {
     // clear the search box if an operator is dropped from operator search box
     this.dragDropService.operatorDropStream.pipe(untilDestroyed(this)).subscribe(() => {
@@ -113,6 +126,102 @@ export class OperatorMenuComponent {
         });
         this.fuse.setCollection(ops);
       });
+
+    // Both streams report only the operators that just changed, so read the
+    // whole selection each time: selecting a second operator would otherwise
+    // look like selecting one, and clearing the selection would go unnoticed.
+    const wrapper = this.workflowActionService.getJointGraphWrapper();
+    merge(wrapper.getJointOperatorHighlightStream(), wrapper.getJointOperatorUnhighlightStream())
+      .pipe(untilDestroyed(this))
+      .subscribe(() => this.updateSuggestions(wrapper.getCurrentHighlightedOperatorIDs()));
+  }
+
+  /**
+   * Offers a next step for a single selected operator. A multi-selection has no
+   * one "after", and an empty selection nothing to follow, so both clear.
+   */
+  private updateSuggestions(selectedIds: readonly string[]): void {
+    const graph = this.workflowActionService.getTexeraGraph();
+    const schema =
+      selectedIds.length === 1 && graph.hasOperator(selectedIds[0])
+        ? this.schemaOf(graph.getOperator(selectedIds[0]).operatorType)
+        : undefined;
+
+    if (schema === undefined) {
+      this.selectedOperatorId = null;
+      this.selectedOperatorName = "";
+      this.nextSuggestions = [];
+      this.nextStepNote = "";
+      // The highlight stream fires from JointJS events, outside Angular's zone.
+      this.changeDetectorRef.detectChanges();
+      return;
+    }
+
+    const operatorId = selectedIds[0];
+    this.selectedOperatorId = operatorId;
+    this.selectedOperatorName =
+      graph.getOperator(operatorId).customDisplayName ?? schema.additionalMetadata.userFriendlyName;
+
+    this.nextOperatorService.suggestionsFor(schema.additionalMetadata.operatorGroupName).then(result => {
+      // The selection may have moved on while the rules were loading.
+      if (this.selectedOperatorId !== operatorId) {
+        return;
+      }
+      this.nextSuggestions = result.suggestions;
+      this.nextStepNote =
+        result.suggestions.length > 0
+          ? ""
+          : result.known
+            ? "Nothing usually follows this — it ends the workflow."
+            : "No suggestions for this group yet.";
+      this.changeDetectorRef.detectChanges();
+    });
+  }
+
+  /**
+   * Places a suggested operator to the right of the selected one and wires them
+   * together, as one undoable step — the point is to skip the search entirely.
+   */
+  public addNext(schema: OperatorSchema): void {
+    const operatorId = this.selectedOperatorId;
+    if (operatorId === null || !this.canModify) {
+      return;
+    }
+
+    const newOperator = this.workflowUtilService.getNewOperatorPredicate(schema.operatorType);
+    const anchor = this.workflowActionService.getJointGraphWrapper().getElementPosition(operatorId);
+    const position = { x: anchor.x + 220, y: anchor.y };
+
+    const source = this.workflowActionService.getTexeraGraph().getOperator(operatorId).outputPorts[0];
+    const target = newOperator.inputPorts[0];
+    // A source operator has no input and a sink no output; without both ends
+    // there is nothing to connect, so place it and let the user wire it.
+    const links =
+      source && target
+        ? [
+            {
+              linkID: this.workflowUtilService.getLinkRandomUUID(),
+              source: { operatorID: operatorId, portID: source.portID },
+              target: { operatorID: newOperator.operatorID, portID: target.portID },
+            },
+          ]
+        : [];
+
+    this.workflowActionService.addOperatorsAndLinks([{ op: newOperator, pos: position }], links);
+
+    // Adding an operator leaves nothing selected, which would close this panel
+    // after a single use. Selecting what was just placed keeps the chain going:
+    // the panel immediately offers what comes after it.
+    this.workflowActionService.getJointGraphWrapper().highlightOperators(newOperator.operatorID);
+  }
+
+  /** The schema for an operator type, or undefined for a type the metadata does not know. */
+  private schemaOf(operatorType: string): OperatorSchema | undefined {
+    try {
+      return this.operatorMetadataService.getOperatorSchema(operatorType);
+    } catch {
+      return undefined;
+    }
   }
 
   /**

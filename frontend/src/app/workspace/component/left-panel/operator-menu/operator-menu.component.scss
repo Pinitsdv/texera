@@ -56,3 +56,56 @@
 #spacer {
   margin-top: 32px;
 }
+
+// Sits between the search box and the group list: the two ways to reach an
+// operator, with the shortcut first.
+.next-step {
+  padding: 6px 9px 8px;
+  border-bottom: 1px solid #e0e0e0;
+  background: #fafcff;
+
+  &__title {
+    font-size: 11px;
+    color: rgba(0, 0, 0, 0.45);
+    margin-bottom: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__option {
+    display: block;
+    width: 100%;
+    padding: 3px 6px;
+    margin-bottom: 2px;
+    border: 1px solid #d6e4f5;
+    border-radius: 3px;
+    background: #fff;
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+
+    &:hover:not([disabled]) {
+      border-color: #1890ff;
+      background: #f0f7ff;
+    }
+
+    &[disabled] {
+      cursor: not-allowed;
+      opacity: 0.5;
+    }
+  }
+
+  &__note {
+    font-size: 11px;
+    font-style: italic;
+    color: rgba(0, 0, 0, 0.4);
+  }
+
+  &__plus {
+    display: inline-block;
+    width: 12px;
+    color: #1890ff;
+    font-weight: 600;
+  }
+}
