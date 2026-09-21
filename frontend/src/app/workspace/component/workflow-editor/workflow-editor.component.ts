@@ -22,6 +22,8 @@ import { combineLatest, fromEvent, merge, Subject } from "rxjs";
 import { NzModalCommentBoxComponent } from "./comment-box-modal/nz-modal-comment-box.component";
 import { NzModalRef, NzModalService } from "ng-zorro-antd/modal";
 import { DragDropService } from "../../service/drag-drop/drag-drop.service";
+import { OperatorMetadataService } from "../../service/operator-metadata/operator-metadata.service";
+import { OperatorSchema } from "../../types/operator-schema.interface";
 import { DynamicSchemaService } from "../../service/dynamic-schema/dynamic-schema.service";
 import { ExecuteWorkflowService } from "../../service/execute-workflow/execute-workflow.service";
 import { fromJointPaperEvent, JointUIService, linkPathStrokeColor } from "../../service/joint-ui/joint-ui.service";
@@ -117,6 +119,19 @@ export class WorkflowEditorComponent implements OnInit, AfterViewInit, OnDestroy
     metricLabel: string;
     heatLabel: string;
   } | null = null;
+  // What a hovered operator is and where it sits in this workflow. Null when hidden.
+  public operatorInfo: {
+    x: number;
+    y: number;
+    name: string;
+    group: string;
+    description: string;
+    upstream: string[];
+    downstream: string[];
+  } | null = null;
+  // Which operator the cursor is on, so graph changes can rebuild the card in place.
+  private hoveredOperatorId: string | null = null;
+  private hoveredAt: { x: number; y: number } = { x: 0, y: 0 };
   private paperInteractive: boolean = true;
   // Keeps the paper sized to its OWN container (not just the window) and rebuilds cell geometry
   // when the container goes 0 -> real size. Needed by embedded previews like the Form View strip,
@@ -171,7 +186,8 @@ export class WorkflowEditorComponent implements OnInit, AfterViewInit, OnDestroy
     private elementRef: ElementRef,
     private config: GuiConfigService,
     private agentService: AgentService,
-    private jupyterPanelService: JupyterPanelService
+    private jupyterPanelService: JupyterPanelService,
+    private operatorMetadataService: OperatorMetadataService
   ) {
     this.wrapper = this.workflowActionService.getJointGraphWrapper();
   }
@@ -234,6 +250,7 @@ export class WorkflowEditorComponent implements OnInit, AfterViewInit, OnDestroy
     this.handleOperatorStatusUpdate();
     this.handleHeatmapOverlay();
     this.handleHeatmapHover();
+    this.handleOperatorInfoHover();
     this.handleRegionEvents();
     this.handleOperatorSuggestionHighlightEvent();
     this.handleAgentHoverHighlight();
@@ -513,6 +530,127 @@ export class WorkflowEditorComponent implements OnInit, AfterViewInit, OnDestroy
       .getTexeraGraph()
       .getAllOperators()
       .forEach(op => this.jointUIService.restoreOperatorFill(this.paper, op));
+  }
+
+  /**
+   * Shows what a hovered operator is and where it sits in this workflow.
+   *
+   * The palette explains an operator until you drop it; after that its name on
+   * the canvas is all you get, and a renamed one loses even that. This answers
+   * both — the operator's own description, plus what feeds it and what it feeds,
+   * which is the part you cannot read off the operator alone.
+   *
+   * Stays out of the way while the Performance overlay is on, since that owns
+   * the hover already.
+   */
+  private handleOperatorInfoHover(): void {
+    fromJointPaperEvent(this.paper, "element:mouseenter")
+      .pipe(untilDestroyed(this))
+      .subscribe(([elementView, evt]) => {
+        if (this.wrapper.getHeatmapView() !== null) {
+          return;
+        }
+        const operatorId = elementView.model.id.toString();
+        if (!this.workflowActionService.getTexeraGraph().hasOperator(operatorId)) {
+          return;
+        }
+        const rect = this.editor.getBoundingClientRect();
+        const mouseEvent = evt as unknown as MouseEvent;
+        this.hoveredOperatorId = operatorId;
+        this.hoveredAt = { x: mouseEvent.clientX - rect.left + 12, y: mouseEvent.clientY - rect.top + 12 };
+        this.refreshOperatorInfo();
+      });
+
+    fromJointPaperEvent(this.paper, "element:mouseleave")
+      .pipe(untilDestroyed(this))
+      .subscribe(() => {
+        this.hoveredOperatorId = null;
+        if (this.operatorInfo === null) {
+          return;
+        }
+        this.operatorInfo = null;
+        this.changeDetectorRef.detectChanges();
+      });
+
+    // The card is usually open while the user is wiring the very operator it
+    // describes — drawing a link never takes the cursor off the box — so it has
+    // to follow the graph rather than only the cursor.
+    const graph = this.workflowActionService.getTexeraGraph();
+    merge(
+      graph.getLinkAddStream(),
+      graph.getLinkDeleteStream(),
+      graph.getOperatorDisplayNameChangedStream(),
+      graph.getOperatorDeleteStream()
+    )
+      .pipe(untilDestroyed(this))
+      .subscribe(() => this.refreshOperatorInfo());
+  }
+
+  /**
+   * Rebuilds the hover card from the current graph. A no-op when nothing is
+   * hovered, so the graph streams can call it freely.
+   */
+  private refreshOperatorInfo(): void {
+    const operatorId = this.hoveredOperatorId;
+    const graph = this.workflowActionService.getTexeraGraph();
+    if (operatorId === null || !graph.hasOperator(operatorId)) {
+      // Covers the operator being deleted while its own card is open.
+      if (this.operatorInfo !== null) {
+        this.operatorInfo = null;
+        this.changeDetectorRef.detectChanges();
+      }
+      return;
+    }
+
+    const operator = graph.getOperator(operatorId);
+    const schema = this.schemaOf(operator.operatorType);
+
+    const links = graph.getAllLinks();
+    // Distinct, because two operators can be joined by more than one port and
+    // the card should name each neighbour once.
+    const upstream = [
+      ...new Set(links.filter(l => l.target.operatorID === operatorId).map(l => this.nameOf(l.source.operatorID))),
+    ];
+    const downstream = [
+      ...new Set(links.filter(l => l.source.operatorID === operatorId).map(l => this.nameOf(l.target.operatorID))),
+    ];
+
+    this.operatorInfo = {
+      ...this.hoveredAt,
+      name: operator.customDisplayName ?? schema?.additionalMetadata.userFriendlyName ?? operator.operatorType,
+      group: schema?.additionalMetadata.operatorGroupName ?? "",
+      description: schema?.additionalMetadata.operatorDescription ?? "",
+      upstream,
+      downstream,
+    };
+    // JointJS paper events fire outside Angular's zone (mirrors the heat-map handling).
+    this.changeDetectorRef.detectChanges();
+  }
+
+  /**
+   * The schema for an operator type, or undefined when the metadata has none —
+   * a stale workflow referring to a removed operator still deserves a card.
+   */
+  private schemaOf(operatorType: string): OperatorSchema | undefined {
+    try {
+      return this.operatorMetadataService.getOperatorSchema(operatorType);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** A renamed operator shows its own name; the catalogue name is the fallback. */
+  private nameOf(operatorId: string): string {
+    const graph = this.workflowActionService.getTexeraGraph();
+    if (!graph.hasOperator(operatorId)) {
+      return "";
+    }
+    const operator = graph.getOperator(operatorId);
+    return (
+      operator.customDisplayName ??
+      this.schemaOf(operator.operatorType)?.additionalMetadata.userFriendlyName ??
+      operator.operatorType
+    );
   }
 
   /**

@@ -124,3 +124,51 @@
     max-height: 480px;
   }
 }
+
+// Mirrors .heatmap-tooltip, but this one wraps: a description is a sentence,
+// not a metric, and the wiring line grows with the number of neighbours.
+.operator-info {
+  position: absolute;
+  z-index: 11;
+  max-width: 260px;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.82);
+  border-radius: 4px;
+  pointer-events: none;
+
+  &__name {
+    font-weight: 600;
+  }
+
+  &__group {
+    font-size: 11px;
+    opacity: 0.6;
+    margin-bottom: 4px;
+  }
+
+  &__description {
+    opacity: 0.92;
+  }
+
+  &__wiring {
+    margin-top: 6px;
+    padding-top: 5px;
+    border-top: 1px solid rgba(255, 255, 255, 0.18);
+    font-size: 11px;
+    opacity: 0.82;
+
+    &--none {
+      font-style: italic;
+      opacity: 0.55;
+    }
+  }
+
+  &__arrow {
+    display: inline-block;
+    width: 12px;
+    opacity: 0.7;
+  }
+}

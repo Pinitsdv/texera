@@ -31,6 +31,40 @@
     <div class="heatmap-tooltip__row">{{ heatmapTooltip.metricLabel }}</div>
     <div class="heatmap-tooltip__row">Heat: {{ heatmapTooltip.heatLabel }}</div>
   </div>
+
+  <!-- What a hovered operator is, and what it is wired to here. -->
+  <div
+    class="operator-info"
+    *ngIf="operatorInfo"
+    [style.left.px]="operatorInfo.x"
+    [style.top.px]="operatorInfo.y">
+    <div class="operator-info__name">{{ operatorInfo.name }}</div>
+    <div
+      class="operator-info__group"
+      *ngIf="operatorInfo.group">
+      {{ operatorInfo.group }}
+    </div>
+    <div
+      class="operator-info__description"
+      *ngIf="operatorInfo.description">
+      {{ operatorInfo.description }}
+    </div>
+    <div
+      class="operator-info__wiring"
+      *ngIf="operatorInfo.upstream.length || operatorInfo.downstream.length">
+      <div *ngIf="operatorInfo.upstream.length">
+        <span class="operator-info__arrow">&#8592;</span> from {{ operatorInfo.upstream.join(", ") }}
+      </div>
+      <div *ngIf="operatorInfo.downstream.length">
+        <span class="operator-info__arrow">&#8594;</span> to {{ operatorInfo.downstream.join(", ") }}
+      </div>
+    </div>
+    <div
+      class="operator-info__wiring operator-info__wiring--none"
+      *ngIf="!operatorInfo.upstream.length && !operatorInfo.downstream.length">
+      not connected yet
+    </div>
+  </div>
   <nz-dropdown-menu
     nzNoAnimation
     #menu="nzDropdownMenu">

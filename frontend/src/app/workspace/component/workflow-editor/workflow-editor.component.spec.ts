@@ -313,6 +313,59 @@ describe("WorkflowEditorComponent", () => {
       expect(model.attr(".add-input-port-button/visibility")).toBe("hidden");
       expect(model.attr(".texera-operator-state/visibility")).toBe("visible");
     });
+
+    /** Rest the pointer on an operator the way the paper reports it, and return the card it produced. */
+    function hoverOperator(operatorID: string) {
+      const view = component.paper.findViewByModel(operatorID);
+      component.paper.trigger("element:mouseenter", view, new MouseEvent("mouseenter"), 0, 0);
+      return component.operatorInfo;
+    }
+
+    it("describes a hovered operator from its metadata", () => {
+      addLinkedPair();
+
+      const card = hoverOperator(mockScanPredicate.operatorID);
+
+      expect(card?.name).toBe("Source: Scan");
+      expect(card?.group).toBe("Source");
+      expect(card?.description).toBe("Read records from a table one by one");
+    });
+
+    it("names a hovered operator's neighbours in this workflow", () => {
+      addLinkedPair();
+
+      expect(hoverOperator(mockScanPredicate.operatorID)?.upstream).toEqual([]);
+      expect(hoverOperator(mockScanPredicate.operatorID)?.downstream).toEqual(["View Results"]);
+      expect(hoverOperator(mockResultPredicate.operatorID)?.upstream).toEqual(["Source: Scan"]);
+    });
+
+    it("keeps an open card current when the graph changes under it", () => {
+      // Drawing or removing a link starts on the operator's own port, so the pointer never leaves the
+      // operator and no fresh mouseenter arrives; the card has to follow the graph instead.
+      addLinkedPair();
+      hoverOperator(mockScanPredicate.operatorID);
+
+      TestBed.inject(WorkflowActionService).deleteLinkWithID(mockScanResultLink.linkID);
+
+      expect(component.operatorInfo?.downstream).toEqual([]);
+    });
+
+    it("clears the card when the pointer leaves the operator", () => {
+      addLinkedPair();
+      hoverOperator(mockScanPredicate.operatorID);
+
+      const view = component.paper.findViewByModel(mockScanPredicate.operatorID);
+      component.paper.trigger("element:mouseleave", view, new MouseEvent("mouseleave"), 0, 0);
+
+      expect(component.operatorInfo).toBeNull();
+    });
+
+    it("leaves the hover to the heat-map tooltip while that overlay is on", () => {
+      addLinkedPair();
+      TestBed.inject(WorkflowActionService).getJointGraphWrapper().setHeatmapView(HeatmapView.Runtime);
+
+      expect(hoverOperator(mockScanPredicate.operatorID)).toBeNull();
+    });
   });
 
   /**
