@@ -82,7 +82,8 @@ describe("OperatorPanelComponent", () => {
     component.searchInputValue = "Source: Scan";
     component.onInput({ target: { value: "Source: Scan" } } as unknown as Event);
 
-    expect(component.autocompleteOptions.length).toBe(1);
+    // Now that descriptions are searched too, a query reaches more than one
+    // operator; naming one must still put that one first.
     expect(component.autocompleteOptions[0]).toBe(mockScanSourceSchema);
   });
 
@@ -90,7 +91,16 @@ describe("OperatorPanelComponent", () => {
     component.searchInputValue = "scan";
     component.onInput({ target: { value: "scan" } } as unknown as Event);
 
-    expect(component.autocompleteOptions.length).toBe(1);
+    expect(component.autocompleteOptions[0]).toBe(mockScanSourceSchema);
+  });
+
+  it("finds an operator from what its description says, not only from its name", () => {
+    // The point of the change: nothing in this query appears in any operator's
+    // name, and before it the search returned nothing at all.
+    const query = "read records from a table";
+    component.searchInputValue = query;
+    component.onInput({ target: { value: query } } as unknown as Event);
+
     expect(component.autocompleteOptions[0]).toBe(mockScanSourceSchema);
   });
 

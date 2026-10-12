@@ -68,13 +68,22 @@ export class OperatorMenuComponent {
   public canModify = true;
 
   // fuzzy search using fuse.js. See parameters in options at https://fusejs.io/
+  //
+  // The description is searched as well as the name, because someone who does
+  // not know an operator's name describes what they want instead, and the
+  // description is where that is written. Matching it needs a looser threshold
+  // than a short name does, and no positional weighting: the words a user
+  // reaches for can be anywhere in the sentence, not near its start. (location
+  // and distance are what ignoreLocation turns off, so they are gone.)
+  //
+  // 0.6 would answer a few more queries but returns a median of 16 operators
+  // out of 164, which is not a list anyone can read. 0.5 keeps the median at 2.
   public fuse = new Fuse([] as ReadonlyArray<OperatorSchema>, {
     shouldSort: true,
-    threshold: 0.3,
-    location: 0,
-    distance: 100,
+    threshold: 0.5,
+    ignoreLocation: true,
     minMatchCharLength: 1,
-    keys: ["additionalMetadata.userFriendlyName"],
+    keys: ["additionalMetadata.userFriendlyName", "additionalMetadata.operatorDescription"],
   });
 
   constructor(
